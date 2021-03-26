@@ -6,6 +6,11 @@ int serve_file(char *read, char **file_buf, int *file_len) {
   strncat(file_name, read, 256);
   
   FILE *file = fopen(file_name, "r");
+  if (file != NULL) {
+    printf("File %s has been opened.\n", file_name);
+  } else {
+    return -1;
+  }
   fseek(file, 0L, SEEK_END);
   *file_len = ftell(file);
   fseek(file, 0L, SEEK_SET);
@@ -88,8 +93,18 @@ int main() {
           read[bytes_received] = '\0';
           int file_len = 0;
           char *file_buf;
-          serve_file(read, &file_buf, &file_len);
+          char will_read[10];
+          if (serve_file(read, &file_buf, &file_len) < 0) {
+            file_buf = malloc(64);
+            strcpy(file_buf, "Requested file doesn't exist\n");
+            snprintf(will_read, 10, "%d", strlen(file_buf));
+            file_len = strlen(file_buf);
+          } else {
+            snprintf(will_read, 10, "%d", file_len);
+          }
+          send(i, will_read, strlen(will_read), 0);
           send(i, file_buf, file_len, 0);
+          free(file_buf);
         }
       }
     }
