@@ -13,14 +13,35 @@ int serve_file(char *read, char **file_buf, int *file_len) {
   }
   fseek(file, 0L, SEEK_END);
   *file_len = ftell(file);
+  char header[10];
+  snprintf(header, 10, "%d", *file_len);
   fseek(file, 0L, SEEK_SET);
-  *file_buf = malloc(*file_len);
-  fread(*file_buf, 1, *file_len, file);
+  *file_buf = malloc(*file_len+strlen(header));
+  strcpy(*file_buf, header);
+  fread(*file_buf+strlen(header), 1, *file_len, file);
   fclose(file);
+  *file_len += strlen(header);
   return 1;
 }
 
 int main() {
+  SSL_library_init();
+  OpenSSL_add_all_algorithms();
+  SSL_load_error_strings();
+
+  SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+  if (!ctx) {
+    fprintf(stderr, "SSL_CTX_new() failed.\n");
+    return 1;
+  }
+
+  if (!SSL_CTX_use_certificate_file(ctx, "cert.pem", SSL_FILETYPE_PEM)
+  || !SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM)) {
+    fprintf(stderr, "SSL_CTX_use_certificate_file() failed.\n");
+    ERR_print_errors_fp(stderr);
+    return 1;
+  }
+
   printf("Configuring local address...\n");
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
@@ -65,7 +86,7 @@ int main() {
       return 1;
     }
     SOCKET i;
-    for (int i = 1; i <= max_socket; ++i) {
+    for (i = 1; i <= max_socket; ++i) {
       if (FD_ISSET(i, &reads)) {
         if (i == socket_listen) {
           struct sockaddr_storage client_address;
@@ -82,12 +103,34 @@ int main() {
           char address_buffer[100];
           getnameinfo((struct sockaddr*) &client_address, client_len, address_buffer, sizeof(address_buffer), 0, 0, NI_NUMERICHOST);
           printf("New connection from %s\n", address_buffer);
-        } else {
-          char read[1025];
-          int bytes_received = recv(i, read, 1024, 0);
+	} else {
+	  
+	  SSL *ssl = SSL_new(ctx);
+	  if (!ssl) {
+	    fprintf(stderr, "SSL_new() failed.\n");
+	    return 1;
+	  }
+
+	  SSL_set_fd(ssl, i);
+	  if (SSL_accept(ssl) <= 0) {
+	    fprintf(stderr, "SSL_accept() failed.\n");
+	    ERR_print_errors_fp(stderr);
+
+	    SSL_shutdown(ssl);
+	    CLOSESOCKET(i);
+	    SSL_free(ssl);
+	    continue;
+	  }
+
+	  printf("SSL connection using %s\n", SSL_get_cipher(ssl));
+          
+	  char read[1025];
+          int bytes_received = SSL_read(ssl, read, 1024);
           if (bytes_received < 1) {
             FD_CLR(i, &master);
             CLOSESOCKET(i);
+	    SSL_shutdown(ssl);
+	    SSL_free(ssl);
             continue;
           }
           read[bytes_received] = '\0';
@@ -96,20 +139,22 @@ int main() {
           char will_read[10];
           if (serve_file(read, &file_buf, &file_len) < 0) {
             file_buf = malloc(64);
-            strcpy(file_buf, "Requested file doesn't exist\n");
-            snprintf(will_read, 10, "%d", strlen(file_buf));
+	    snprintf(file_buf, 64,"%d", 29);
+            strcat(file_buf, "Requested file doesn't exist\n");
             file_len = strlen(file_buf);
-          } else {
-            snprintf(will_read, 10, "%d", file_len);
           }
-          send(i, will_read, strlen(will_read), 0);
-          send(i, file_buf, file_len, 0);
+          SSL_write(ssl, file_buf, file_len);
           free(file_buf);
+	  SSL_shutdown(ssl);
+	  SSL_free(ssl);
+	  FD_CLR(i, &master);
+	  CLOSESOCKET(i);
         }
       }
     }
   }
   printf("Closing listening socket...\n");
+  SSL_CTX_free(ctx);
   CLOSESOCKET(socket_listen);
   printf("Finished.\n");
   return 0;

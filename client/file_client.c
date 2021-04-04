@@ -1,13 +1,18 @@
 #include "client.h"
 
-int read_from_socket(char *pointer, int already_buf, long will_read, SOCKET socket_peer) {
-  printf("%.*s", already_buf, pointer);
-  //TODO: Complete function
-}
-
 int main(int argc, char *argv[]) {
   if (argc < 3) {
     fprintf(stderr, "usage: file_client hostname filename\n");
+    return 1;
+  }
+
+  SSL_library_init();
+  OpenSSL_add_all_algorithms();
+  SSL_load_error_strings();
+
+  SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+  if (!ctx) {
+    fprintf(stderr, "SSL_CTX_new() failed.\n");
     return 1;
   }
   
@@ -42,27 +47,46 @@ int main(int argc, char *argv[]) {
   }
   freeaddrinfo(peer_address);
 
+  SSL *ssl = SSL_new(ctx);
+  if (!ctx) {
+    fprintf(stderr, "SSL_new() failed.\n");
+    return 1;
+  }
+
+  SSL_set_fd(ssl, socket_peer);
+  if (SSL_connect(ssl) == -1) {
+    fprintf(stderr, "SSL_connect() failed.\n");
+    ERR_print_errors_fp(stderr);
+    return 1;
+  }
+
+  printf("SSL/TLS is using %s\n", SSL_get_cipher(ssl));
+
   printf("Connected.\n");
   
-  send(socket_peer, argv[2], strlen(argv[2]), 0);
+  SSL_write(ssl, argv[2], strlen(argv[2]));
   
   char read[4096];
-  int bytes_received = recv(socket_peer, read, 4096, 0);
+  int bytes_received = SSL_read(ssl, read, 4096);
   if (bytes_received < 1) {
     printf("Connection closed by peer.\n");
   } else {
     char *pointer;
-    long will_read = strtol(read, &pointer, 10);
+    int will_read = strtol(read, &pointer, 10);
     if (pointer != read) {
       //OK
       bytes_received -= pointer-read;
-      printf("Receiving %ld bytes\n", will_read);
-      read_from_socket(pointer, bytes_received, will_read, socket_peer);
+      printf("Receiving %d bytes\n", will_read);
+      printf("%*s", bytes_received, pointer);
     }
   }
 
   printf("Closing socket...\n");
+  SSL_shutdown(ssl);
   CLOSESOCKET(socket_peer);
+  SSL_free(ssl);
+
+  SSL_CTX_free(ctx);
 
   printf("Finished.");
   return 0;

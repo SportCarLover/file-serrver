@@ -14,3 +14,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+#include <openssl/crypto.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
